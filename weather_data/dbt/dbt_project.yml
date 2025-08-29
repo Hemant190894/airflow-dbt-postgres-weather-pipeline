@@ -1,0 +1,16 @@
+name: weather_dbt
+version: 1.0.0
+config-version: 2
+
+profile: weather_profile
+
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+macro-paths: ["macros"]
+seed-paths: ["seeds"]
+snapshot-paths: ["snapshots"]
+test-paths: ["tests"]
+
+models:
+  weather_dbt:
+ 

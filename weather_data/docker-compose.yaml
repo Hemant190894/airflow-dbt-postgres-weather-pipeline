@@ -1,0 +1,121 @@
+services:
+  postgres:
+    image: postgres:14
+    container_name: postgres_db
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    ports:
+      - "${DB_PORT}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d
+    restart: always
+
+  create-airflow-db:
+    image: postgres:14
+    container_name: create_airflow_db
+    env_file:
+      - .env
+    depends_on:
+      - postgres
+    command: bash -lc "PGPASSWORD=$DB_PASSWORD psql -h postgres -U $DB_USER -d $DB_NAME -tc \"SELECT 1 FROM pg_database WHERE datname='${AIRFLOW_DB}'\" | grep -q 1 || PGPASSWORD=$DB_PASSWORD psql -h postgres -U $DB_USER -d $DB_NAME -c \"CREATE DATABASE ${AIRFLOW_DB};\""
+    restart: "no"
+
+  airflow-init:
+    image: apache/airflow:2.7.1
+    container_name: airflow_init
+    env_file:
+      - .env
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${DB_USER}:${DB_PASSWORD}@postgres:5432/${AIRFLOW_DB}
+    depends_on:
+      postgres:
+        condition: service_started
+      create-airflow-db:
+        condition: service_completed_successfully
+    entrypoint: /bin/bash
+    command: -c "airflow db migrate && airflow users create --username ${AIRFLOW_ADMIN_USERNAME:-admin} --password ${AIRFLOW_ADMIN_PASSWORD:-admin} --firstname Admin --lastname User --role Admin --email ${AIRFLOW_ADMIN_EMAIL:-admin@example.com} || true"
+    restart: "no"
+
+  airflow-webserver:
+    image: apache/airflow:2.7.1
+    container_name: airflow_webserver
+    env_file:
+      - .env
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${DB_USER}:${DB_PASSWORD}@postgres:5432/${AIRFLOW_DB}
+      AIRFLOW__CORE__FERNET_KEY: 'gFDPa2ayRoHWqMQVmh1wNB7Mi9FpBphkpjHPue1g1IM='
+      AIRFLOW__WEBSERVER__RBAC: "True"
+      AIRFLOW__CORE__SECRET_KEY: 'temporary_key_1234567890'
+      AIRFLOW__WEBSERVER__SECRET_KEY: 'temporary_key_1234567890'
+      AIRFLOW__LOGGING__REMOTE_LOGGING: 'False'
+      AIRFLOW__WEBSERVER__BASE_URL: 'http://localhost:8080'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'False'
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./airflow/logs:/opt/airflow/logs
+      - ./api_request:/opt/airflow/api_request
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: bash -lc "pip install --no-cache-dir 'apache-airflow-providers-docker>=3.7.0' && airflow webserver"
+    ports:
+      - "8080:8080"
+    restart: always
+
+  airflow-scheduler:
+    image: apache/airflow:2.7.1
+    container_name: airflow_scheduler
+    env_file:
+      - .env
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${DB_USER}:${DB_PASSWORD}@postgres:5432/${AIRFLOW_DB}
+      AIRFLOW__CORE__FERNET_KEY: 'gFDPa2ayRoHWqMQVmh1wNB7Mi9FpBphkpjHPue1g1IM='
+      AIRFLOW__CORE__SECRET_KEY: 'temporary_key_1234567890'
+      AIRFLOW__WEBSERVER__SECRET_KEY: 'temporary_key_1234567890'
+      AIRFLOW__LOGGING__REMOTE_LOGGING: 'False'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'False'
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./airflow/logs:/opt/airflow/logs
+      - ./api_request:/opt/airflow/api_request
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: bash -lc "pip install --no-cache-dir 'apache-airflow-providers-docker>=3.7.0' && airflow scheduler"
+    restart: always
+  
+  dbt:
+    container_name: dbt_container
+    image: ghcr.io/dbt-labs/dbt-postgres:1.9.latest
+    platform: linux/amd64
+    volumes:
+      - ./dbt:/opt/dbt
+    working_dir: /opt/dbt
+    env_file:
+      - .env
+    environment:
+      DBT_PROFILES_DIR: /opt/dbt/profiles
+    depends_on:
+      - postgres
+    networks:
+      - default
+    command: debug
+    restart: "no"
+
+volumes:
+  postgres_data:
